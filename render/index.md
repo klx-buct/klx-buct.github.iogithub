@@ -154,3 +154,142 @@ function FiberNode(tag, pendingProps, key, mode) {
 
  #### 最终渲染
  最后<code>react</code>会走到<code>commit</code>阶段，在这里它会去遍历之前生成的更新链表，然后把这些内容真正的更新到用户界面上，至此，一次<code>render</code>流程就结束了，我们看到的界面也更新了。
+
+ ## 渲染过程的优化
+
+ ### 避免重复渲染
+ 我们上面把<code>react</code>的整个渲染流程梳理了一遍, 那么在我们更新<code>state</code>的时候不可能把整个<code>fiber</code>树都重新更新一遍，那么什么时候才会触发<code>react</code>的更新流程呢？
+
+ **只要<code>props</code>改变了，就会触发<code>react</code>的更新流程**
+
+这句话看似简单，实则另有玄机，我们来看看这个例子：
+```jsx
+class App extends Component {
+  state = {data: "hello world", src: logo};
+
+  data = {data: 'test'}
+
+  render() {
+    return (
+      <div>
+        <Item data={{data: this.data}}/>
+        <button onClick={() => this.setState({data: "new data", src: logo2})}>setState</button>
+      </div>
+    );
+  }
+}
+
+export default App;
+```
+如果我点击<code>setState</code>，传给<code>Item</code>的<code>data</code>会不会更新？我们这样想，<code>data</code>是挂在<code>this</code>上的一个对象，它其实是不会改变的，那这样想起来我们两次给的<code>props</code>其实是没有改变的。
+
+但是真实情况确实<code>Item</code>组件每次都会重新经历一遍<code>diff</code>流程，为什么呢？还记得我们之前说<code>JSX</code>会调用一个<code>createElement</code>吗，其实这个函数会对<code>props</code>再包装一层，生成了一个新的<code>props</code>。所以即使我们传给<code>Item</code>的值没有改变，传到<code>React</code>那里还是变了。
+
+这个问题和<code>Context</code>的重复渲染问题很像，我们再来看下面的代码:
+```jsx
+//app.js
+class App extends React.Component {
+  state = {
+    data: 'old data'
+  }
+
+  changeState = data => {
+    this.setState({
+      data
+    })
+  }
+
+  render() {
+    return (
+      <CustomContext.Provider value={{data: this.state, setData: this.changeState}}>
+        <div className="App">
+          <ContextContent />
+          <OtherContent />
+        </div>
+      </CustomContext.Provider>
+    );
+  }
+}
+
+export default App;
+
+//ContextContent.js
+export default class ContextContent extends Component {
+  render() {
+    console.log("Context render")
+    return <CustomContext.Consumer>
+        {value => (
+          <div>
+            <div>{value.data.data}</div>
+            <button onClick={() => value.setData(Math.random())}>change</button>
+          </div>
+        )}
+      </CustomContext.Consumer>
+  }
+}
+
+//OtherContent.js
+export default class OtherContent extends Component {
+  render() {
+    console.log("otherContent render")
+    return (
+      <>
+        <div>other content</div>
+      </>
+    )
+  }
+}
+```
+我们通过<code>Context</code>给里面的组件传值，当我们改变<code>state</code>的时候，当然只希望用到了这个值的组件重新渲染，但是目前这种写法会导致什么结果呢？
+![](https://klx-buct.github.io/klx-buct.github.iogithub/render/context.gif)
+可以看到，我们每次改变<code>state</code>的时候，另一个无关的组件也更新了。为什么？因为我们每次都调用了<code>createElement</code>，每次都生成了一个新的<code>props</code>（即使这里我们没有给任何<code>props</code>，<code>react</code>最后拿到的<code>props</code>其实是<code>createElement</code>内部生成的）。
+
+那么问题如何解决？我们想办法让<code>props</code>不要改变，也就是想办法不要每次都让无关组件调用<code>createElement</code>，具体解决方法我这里就不给出了，让大家思考一下。
+
+这也是为什么<code>Context</code>使用不当会有性能问题的原因。想想在组件非常多的情况下，如果你在最外层给了一个<code>Provider</code>，又去频繁的改变它的<code>Value</code>，那么结果可想而知，每次都会重新<code>diff</code>一遍整个<code>fiber</code>树。
+
+注意我这里说的是重新<code>diff</code>而不是重新渲染。<code>react</code>走到最后会发现其实任何东西都没有改变，所以它并不会重新渲染这个组件，也就是不会去更新用户界面上的内容。但是<code>react</code>耗时的部分其实恰恰就在<code>diff</code>，你可以理解为你做了一大堆工作来判断这个组件什么地方需要更新，最后得出的结论是这个组件并不需要更新。
+
+### 给组件加 key 值
+其实我们之前有提到过, <code>react</code>会尽可能的去复用<code>fiber</code>结点。所以即使你没有特意加<code>key</code>，只要你不随意改变<code>DOM</code>结构，<code>react</code>还是会去复用各个结点。
+
+而在渲染数组结构时，<code>react</code>默认会拿<code>index</code>作为<code>key</code>，所以如果你此时随意改变各个结点的位置，可能就会导致<code>react</code>的优化失效，此时我们需要给每个结点一个真正能代表它本身的<code>key</code>，这样才能保证在顺序改变时<code>react</code>还能认出他们。
+
+那么加了<code>key</code>之后的用处是什么？如果<code>key</code>不变的情况下还会重新渲染吗？
+
+加了<code>key</code>之后<code>react</code>在构建<code>fiber</code>树的时候就会尝试去复用之前的结点。所以它带来的优化是<code>diff</code>过程构建结点的时候更快了，后面也会照常的对比<code>props</code>然后加入到更新链表中。
+
+那么有没有一种方式是可以告诉<code>react</code>，我这个组件啥都没改，你别给我动它，啥也别管。<code>shouldComponentUpdate</code>就起到了一个这样的作用。
+
+### shouldComponentUpdate
+通过给组件加<code>key</code>的方法确实有效，但是<code>react</code>最终还是走了<code>diff</code>流程。
+
+而生命周期中有一个叫做<code>shouldComponentUpdate</code>的，从名字就可以看出来：组件是否应该更新，如果我们返回<code>false</code>的话，那么<code>react</code>是不会去进行<code>diff</code>流程，也不会去对比<code>props</code>，更不会去更新用户界面上的组件了。
+
+我们平时可以通过继承<code>PurComponent</code>组件来达到一个简单的优化效果，继承了PurComponent之后会对<code>props</code>进行一层浅比较，在<code>props</code>没有改变的情况下不会去重新走<code>diff</code>更新流程。
+
+而我们在使用<code>function</code>组件的时候也可以通过<code>React.memo</code>达到相同的效果。
+
+比如我在上文的<code>Context</code>例子中稍微修改一下, 把<code>Component</code>改为<code>PurComponent</code>
+```js
+//otherContent.js
+export default class OtherContent extends PureComponent {
+  render() {
+    console.log("otherContent render")
+    return (
+      <>
+        <div>other content</div>
+      </>
+    )
+  }
+}
+```
+我们再来看效果
+![](https://klx-buct.github.io/klx-buct.github.iogithub/render/purRender.gif)
+
+这样每次改变的时候<code>otherContent</code>组件就不会再走一遍<code>diff</code>流程了。
+
+## 结语
+好了，这就是今天的全部内容了，本文主要介绍了<code>react</code>是如何把我们的代码渲染到浏览器上的，其实这里面还有很多学问和细节没有在文中列出。
+
+如果文中有什么错误的地方，还请大家在评论区中指出
