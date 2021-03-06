@@ -133,5 +133,24 @@ function FiberNode(tag, pendingProps, key, mode) {
 
  #### fiber 对象的 diff 算法
  <code>diff</code>算法的目的是什么？找出可以复用的<code>fiber</code>结点，节约创建新结点的时间。我们用图说话
- ![](https://klx-buct.github.io/klx-buct.github.iogithub/oldFiber.png)
- 我们这里有五个组件, 他们一起组成了一颗<code>Fiber</code>树, 在一次<code>setState</code>之后，组件<code>D</code>变成了组件<code>E</code>
+![](https://klx-buct.github.io/klx-buct.github.iogithub/render/oldFiber.png)
+ 我们这里有五个组件, 他们一起组成了一颗<code>Fiber</code>树, 在一次<code>setState</code>之后，组件<code>D</code>变成了组件<code>E</code>, 变成了下面这样
+![](https://klx-buct.github.io/klx-buct.github.iogithub/render/newFiber.png)
+ 那第二颗<code>fiber</code>树会如何生成?<code>react</code>通过<code>diff</code>，会知道<code>App</code> 、<code>A</code>、<code>B</code>、<code>C</code>四个组件都没有改变，会复用之前的<code>fiber</code>结点。而<code>D</code>组件变成了<code>E</code>组件，<code>react</code>就会帮它重新生成一个<code>fiber</code>结点。
+ 
+ 那么<code>diff</code>的具体过程是什么？
+
+ 简单来说，如果是单个结点，只要<code>key</code>和<code>type</code>（结点类型）相同，<code>react</code>就会进行复用。不给<code>key</code>的情况下默认是<code>null</code>。在内部比较时<code>null === null</code>，所以此时在<code>type</code>相同的情况下也会进行复用。
+
+ 如果是多个结点，也是比较<code>key</code>和<code>type</code>，此时不给<code>key</code>的情况下会默认将<code>index</code>作为<code>key</code>。在这种情况下，除了按顺序比较<code>key</code>和<code>type</code>之外，还针对结点更换位置的情况做了优化，会根据<code>key</code>值去列表中寻找对应的结点，尝试复用。
+
+ 可以看出，<code>react</code>会尽可能的去复用之前的结点, 避免创建新的结点。
+
+ #### 新 fiber 树到更新链表
+ 对于<code>react</code>来说，一切都是<code>props</code>，比如<code>DOM</code>结点上的<code>style</code>、<code>src</code>、<code>data-props</code>等等，而里面包裹的内容就是<code>props.children</code>，所以<code>react</code>在生成新的<code>fiber</code>后，会去对比新旧<code>props</code>的区别，如果有改变就会把它加到更新链表中去。更新链表是什么？我们再次用图说话
+ ![](https://klx-buct.github.io/klx-buct.github.iogithub/render/update.png)
+
+ <code>fiber</code>结点上有一个属性叫做<code>nextEffect</code>，它会把各个需要更新的结点连接起来，所以当<code>react</code>发现<code>props</code>有改变的时候，就会将其加入到这个链路中来。
+
+ #### 最终渲染
+ 最后<code>react</code>会走到<code>commit</code>阶段，在这里它会去遍历之前生成的更新链表，然后把这些内容真正的更新到用户界面上，至此，一次<code>render</code>流程就结束了，我们看到的界面也更新了。
